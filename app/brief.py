@@ -45,7 +45,8 @@ State no figure that is not already there. No preamble, no closing remark."""
 
 REASON_PHRASES = {
     "site_visit_booked": "Site visit confirmed.",
-    "qualification_complete": "Budget, locality and requirement are all captured.",
+    "qualification_complete":
+        "Budget, locality, BHK, possession and family size are all captured.",
     "possession_and_price_asked": "Asked about both possession and pricing.",
     "clarification_exhausted": "Three clarifications in a row went unanswered.",
     "negotiation_request": "Buyer asked to negotiate the price.",

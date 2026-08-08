@@ -64,28 +64,37 @@ class TestSiteVisitBooked:
 
 class TestQualificationComplete:
     """The bar is deliberately raised past §9 — budget + locality alone fires at
-    turn three, and a nurture agent that nurtures for ninety seconds is not one."""
+    turn three, and a nurture agent that nurtures for ninety seconds is not one.
+    Every field in the qualification order has to be answered."""
 
     def test_budget_and_locality_alone_do_not_fire(self, turn):
         qualify(budget_min=5_500_000, budget_max=6_500_000,
                 preferred_localities=["Bopal"])
         assert escalation.evaluate(1, turn) is None
 
-    def test_budget_locality_and_bhk_fire(self, turn):
-        qualify(budget_max=6_500_000, preferred_localities=["Bopal"], bhk_need=3)
+    def test_the_whole_qualification_order_fires(self, turn):
+        qualify(budget_max=6_500_000, preferred_localities=["Bopal"], bhk_need=3,
+                possession_need="2026-12", family_size=4)
         assert escalation.evaluate(1, turn) == ("qualification_complete", "medium")
 
-    def test_budget_locality_and_possession_fire(self, turn):
-        qualify(budget_max=6_500_000, preferred_localities=["Bopal"],
+    def test_everything_but_family_size_does_not_fire(self, turn):
+        qualify(budget_max=6_500_000, preferred_localities=["Bopal"], bhk_need=3,
                 possession_need="2026-12")
-        assert escalation.evaluate(1, turn) == ("qualification_complete", "medium")
+        assert escalation.evaluate(1, turn) is None
+
+    def test_everything_but_possession_does_not_fire(self, turn):
+        qualify(budget_max=6_500_000, preferred_localities=["Bopal"], bhk_need=3,
+                family_size=4)
+        assert escalation.evaluate(1, turn) is None
 
     def test_bhk_without_a_budget_does_not_fire(self, turn):
-        qualify(preferred_localities=["Bopal"], bhk_need=3)
+        qualify(preferred_localities=["Bopal"], bhk_need=3,
+                possession_need="2026-12", family_size=4)
         assert escalation.evaluate(1, turn) is None
 
     def test_a_budget_without_a_locality_does_not_fire(self, turn):
-        qualify(budget_max=6_500_000, bhk_need=3)
+        qualify(budget_max=6_500_000, bhk_need=3, possession_need="2026-12",
+                family_size=4)
         assert escalation.evaluate(1, turn) is None
 
     def test_a_blank_profile_does_not_fire(self, turn):

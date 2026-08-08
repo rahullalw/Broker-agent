@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>AllSet — demo console</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --panel2: #1e222b; --border: #2a2f3a;
+    --text: #e6e8eb; --muted: #8a92a3; --accent: #4f8cff; --good: #3ecf8e;
+    --warn: #f5a623; --bad: #ef5b5b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    background: var(--bg); color: var(--text); height: 100vh; overflow: hidden;
+  }
+  #app { display: flex; flex-direction: column; height: 100vh; }
+  header {
+    display: flex; align-items: center; gap: 16px; padding: 10px 16px;
+    background: var(--panel); border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  header .sub { color: var(--muted); font-size: 12px; }
+  select {
+    background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 5px 8px; font-size: 13px;
+  }
+  #status-pill {
+    margin-left: auto; font-size: 12px; padding: 3px 10px; border-radius: 10px;
+    background: var(--panel2); border: 1px solid var(--border); color: var(--muted);
+  }
+  #status-pill.active { color: var(--good); border-color: var(--good); }
+  #status-pill.escalated { color: var(--warn); border-color: var(--warn); }
+
+  #tabs { display: flex; background: var(--panel); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  .tab {
+    padding: 9px 18px; cursor: pointer; font-size: 13px; color: var(--muted);
+    border-bottom: 2px solid transparent; user-select: none;
+  }
+  .tab.active { color: var(--text); border-bottom-color: var(--accent); }
+  .tab .count {
+    display: inline-block; margin-left: 6px; background: var(--accent); color: #fff;
+    font-size: 10px; padding: 1px 6px; border-radius: 8px;
+  }
+
+  main { flex: 1; overflow: hidden; position: relative; }
+  .view { position: absolute; inset: 0; display: none; flex-direction: column; }
+  .view.active { display: flex; }
+
+  /* --- Chat --- */
+  #chat-messages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+  .bubble { max-width: 70%; padding: 9px 13px; border-radius: 10px; font-size: 14px; line-height: 1.45; white-space: pre-wrap; }
+  .bubble.user { align-self: flex-end; background: var(--accent); color: #fff; }
+  .bubble.assistant { align-self: flex-start; background: var(--panel2); border: 1px solid var(--border); }
+  .bubble .meta { display: block; margin-top: 4px; font-size: 10.5px; opacity: .65; }
+  .bubble.system { align-self: center; background: transparent; color: var(--muted); font-size: 12px; font-style: italic; }
+  #chat-input-row { display: flex; gap: 8px; padding: 12px; border-top: 1px solid var(--border); background: var(--panel); flex-shrink: 0; }
+  #chat-input {
+    flex: 1; background: var(--panel2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 12px; font-size: 14px;
+  }
+  #chat-input:disabled { opacity: .5; }
+  button {
+    background: var(--accent); color: #fff; border: none; border-radius: 8px;
+    padding: 10px 16px; font-size: 14px; cursor: pointer; font-weight: 500;
+  }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  button.secondary { background: var(--panel2); border: 1px solid var(--border); color: var(--text); }
+
+  /* --- Trace --- */
+  #trace-body { flex: 1; overflow-y: auto; padding: 16px; font-size: 13px; }
+  .trace-turn { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 12px; overflow: hidden; }
+  .trace-turn-header { padding: 8px 12px; background: var(--panel2); font-weight: 600; display: flex; justify-content: space-between; }
+  .trace-turn-body { padding: 10px 12px; }
+  .trace-line { margin-bottom: 6px; }
+  .trace-label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  .tool-call {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+    padding: 8px 10px; margin: 6px 0; font-family: 'SF Mono', Consolas, monospace; font-size: 12px;
+  }
+  .tool-call .name { color: var(--accent); font-weight: 600; }
+  pre { white-space: pre-wrap; word-break: break-word; margin: 4px 0 0; font-family: 'SF Mono', Consolas, monospace; font-size: 11.5px; color: var(--muted); }
+  .rejection {
+    border: 1px solid var(--bad); background: rgba(239,91,91,.08); border-radius: 6px;
+    padding: 8px 10px; margin-bottom: 10px; font-size: 12.5px;
+  }
+  .rejection .title { color: var(--bad); font-weight: 600; font-size: 12px; margin-bottom: 4px; }
+  .span-bad { background: rgba(239,91,91,.3); border-radius: 3px; padding: 0 2px; }
+
+  /* --- Inbox --- */
+  #inbox-body { flex: 1; overflow-y: auto; padding: 16px; }
+  .lead-card {
+    border: 1px solid var(--border); border-radius: 8px; margin-bottom: 14px; overflow: hidden;
+  }
+  .lead-header {
+    padding: 10px 14px; background: var(--panel2); display: flex; justify-content: space-between; align-items: center;
+  }
+  .lead-header .name { font-weight: 600; font-size: 14px; }
+  .lead-header .badge { font-size: 11px; padding: 2px 8px; border-radius: 8px; background: var(--warn); color: #1a1300; font-weight: 600; }
+  .lead-body { padding: 12px 14px; }
+  .brief { font-family: 'SF Mono', Consolas, monospace; font-size: 12.5px; white-space: pre-wrap; background: var(--panel); border-radius: 6px; padding: 10px; line-height: 1.5; }
+  .unread { margin-top: 10px; font-size: 12.5px; color: var(--muted); }
+  .unread .msg { padding: 4px 0; border-top: 1px dashed var(--border); }
+  .empty { color: var(--muted); text-align: center; padding: 40px; font-size: 13px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <h1>AllSet — demo console</h1>
+    <select id="convo-select">
+      <option value="1">1 · Priya (English)</option>
+      <option value="2">2 · Rakesh (Hinglish negotiator)</option>
+      <option value="3">3 · Anjali (unsatisfiable)</option>
+    </select>
+    <span class="sub" id="buyer-sub"></span>
+    <span id="status-pill">…</span>
+  </header>
+
+  <div id="tabs">
+    <div class="tab active" data-view="chat">Chat</div>
+    <div class="tab" data-view="trace">Trace <span class="count" id="trace-count" style="display:none"></span></div>
+    <div class="tab" data-view="inbox">Broker Inbox <span class="count" id="inbox-count" style="display:none"></span></div>
+  </div>
+
+  <main>
+    <div class="view active" id="view-chat">
+      <div id="chat-messages"></div>
+      <div id="chat-input-row">
+        <input id="chat-input" type="text" placeholder="Type a message as the buyer…" autocomplete="off">
+        <button id="send-btn">Send</button>
+      </div>
+    </div>
+
+    <div class="view" id="view-trace">
+      <div id="trace-body"></div>
+    </div>
+
+    <div class="view" id="view-inbox">
+      <div id="inbox-body"></div>
+    </div>
+  </main>
+</div>
+
+<script>
+const API = '';
+let currentConvo = 1;
+let msgCounter = 0;
+let inFlight = false;
+
+const $ = (id) => document.getElementById(id);
+
+document.querySelectorAll('.tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+    tab.classList.add('active');
+    $('view-' + tab.dataset.view).classList.add('active');
+  });
+});
+
+$('convo-select').addEventListener('change', (e) => {
+  currentConvo = parseInt(e.target.value, 10);
+  refreshTrace();
+  refreshInbox();
+});
+
+$('send-btn').addEventListener('click', sendMessage);
+$('chat-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+});
+
+async function sendMessage() {
+  const input = $('chat-input');
+  const text = input.value.trim();
+  if (!text || inFlight) return;
+  inFlight = true;
+  input.disabled = true;
+  $('send-btn').disabled = true;
+  input.value = '';
+
+  try {
+    const res = await fetch(`${API}/conversations/${currentConvo}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, wa_message_id: `ui-${currentConvo}-${Date.now()}-${msgCounter++}` }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      appendSystemNote(`Error ${res.status}: ${err.detail || res.statusText}`);
+    }
+  } catch (err) {
+    appendSystemNote(`Request failed: ${err.message}`);
+  } finally {
+    inFlight = false;
+    input.disabled = false;
+    $('send-btn').disabled = false;
+    input.focus();
+    await refreshTrace();
+    await refreshInbox();
+  }
+}
+
+function appendSystemNote(text) {
+  const div = document.createElement('div');
+  div.className = 'bubble system';
+  div.textContent = text;
+  $('chat-messages').appendChild(div);
+  div.scrollIntoView({ block: 'end' });
+}
+
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function fmtTime(iso) {
+  if (!iso) return '';
+  try { return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }); }
+  catch { return iso; }
+}
+
+async function refreshTrace() {
+  let data;
+  try {
+    const res = await fetch(`${API}/conversations/${currentConvo}`);
+    if (!res.ok) return;
+    data = await res.json();
+  } catch { return; }
+
+  $('buyer-sub').textContent = `${data.buyer.name} · ${data.buyer.phone}`;
+  const pill = $('status-pill');
+  pill.textContent = data.status;
+  pill.className = data.status === 'active' ? 'active' : (data.status === 'escalated' ? 'escalated' : '');
+
+  renderChat(data);
+  renderTrace(data);
+}
+
+function renderChat(data) {
+  const box = $('chat-messages');
+  const wasAtBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 40;
+  box.innerHTML = '';
+  for (const m of data.messages) {
+    const div = document.createElement('div');
+    div.className = 'bubble ' + (m.role === 'user' ? 'user' : 'assistant');
+    if (m.content === null) continue;
+    div.innerHTML = esc(m.content) +
+      (m.role === 'assistant' ? `<span class="meta">${esc(m.model_used || '')} · ${m.latency_ms != null ? m.latency_ms + 'ms' : ''}</span>` : '');
+    box.appendChild(div);
+  }
+  if (data.status === 'escalated') {
+    appendSystemNoteInto(box, 'Conversation escalated — the agent has gone silent. See Broker Inbox.');
+  }
+  if (wasAtBottom) box.scrollTop = box.scrollHeight;
+}
+
+function appendSystemNoteInto(box, text) {
+  const div = document.createElement('div');
+  div.className = 'bubble system';
+  div.textContent = text;
+  box.appendChild(div);
+}
+
+function renderTrace(data) {
+  const body = $('trace-body');
+  body.innerHTML = '';
+
+  const countEl = $('trace-count');
+  const rejections = data.guard_rejections || [];
+  if (rejections.length) {
+    countEl.style.display = 'inline-block';
+    countEl.textContent = rejections.length;
+    countEl.style.background = 'var(--bad)';
+  } else {
+    countEl.style.display = 'none';
+  }
+
+  for (const rej of rejections) {
+    const div = document.createElement('div');
+    div.className = 'rejection';
+    let text = esc(rej.rejected_text);
+    for (const span of (rej.offending_spans || [])) {
+      text = text.split(esc(span)).join(`<span class="span-bad">${esc(span)}</span>`);
+    }
+    div.innerHTML = `<div class="title">Guard rejection — ${fmtTime(rej.created_at)}</div>${text}`;
+    body.appendChild(div);
+  }
+
+  const userMsgs = data.messages.filter(m => m.role === 'user');
+  if (!userMsgs.length && !rejections.length) {
+    body.innerHTML += '<div class="empty">No turns yet. Send a message from the Chat tab.</div>';
+    return;
+  }
+
+  let turnNo = 0;
+  for (const m of data.messages) {
+    if (m.role !== 'user') continue;
+    turnNo += 1;
+    const turn = document.createElement('div');
+    turn.className = 'trace-turn';
+    const assistantReply = data.messages.find(x => x.role === 'assistant' && x.id > m.id)
+      ? data.messages.filter(x => x.role === 'assistant' && x.id > m.id)[0] : null;
+
+    let toolsHtml = '';
+    for (const tc of (m.tool_calls || [])) {
+      toolsHtml += `
+        <div class="tool-call">
+          <div><span class="name">${esc(tc.tool_name)}</span> · ${tc.latency_ms != null ? tc.latency_ms + 'ms' : ''}</div>
+          <pre>args: ${esc(JSON.stringify(tc.args))}</pre>
+          <pre>result: ${esc(JSON.stringify(tc.result))}</pre>
+        </div>`;
+    }
+    if (!toolsHtml) toolsHtml = '<div class="trace-label">no tool calls</div>';
+
+    turn.innerHTML = `
+      <div class="trace-turn-header">
+        <span>#${data.buyer.id}-msg${turnNo} · ${esc(data.buyer.name)}</span>
+        <span>${fmtTime(m.created_at)}</span>
+      </div>
+      <div class="trace-turn-body">
+        <div class="trace-line"><span class="trace-label">said</span><br>${esc(m.content)}</div>
+        <div class="trace-line"><span class="trace-label">tool calls</span>${toolsHtml}</div>
+      </div>`;
+    body.appendChild(turn);
+  }
+
+  if (data.escalation) {
+    const esc_ = data.escalation;
+    const div = document.createElement('div');
+    div.className = 'trace-turn';
+    div.innerHTML = `
+      <div class="trace-turn-header"><span>escalation</span><span>${fmtTime(esc_.created_at)}</span></div>
+      <div class="trace-turn-body">
+        <div class="trace-line"><span class="trace-label">reason</span> ${esc(esc_.reason)} · urgency: ${esc(esc_.urgency)}</div>
+        <div class="trace-line"><span class="trace-label">brief</span><pre>${esc(esc_.brief)}</pre></div>
+      </div>`;
+    body.appendChild(div);
+  }
+}
+
+async function refreshInbox() {
+  let data;
+  try {
+    const res = await fetch(`${API}/broker/inbox`);
+    if (!res.ok) return;
+    data = await res.json();
+  } catch { return; }
+
+  // The endpoint returns every broker's queue; this console is scoped to one
+  // demo persona at a time, so show only that persona's leads.
+  const leads = (data.leads || []).filter(l => l.conversation_id === currentConvo);
+
+  const countEl = $('inbox-count');
+  if (leads.length) {
+    countEl.style.display = 'inline-block';
+    countEl.textContent = leads.length;
+  } else {
+    countEl.style.display = 'none';
+  }
+
+  const body = $('inbox-body');
+  body.innerHTML = '';
+  if (!leads.length) {
+    body.innerHTML = '<div class="empty">No escalated leads for this buyer yet.</div>';
+    return;
+  }
+
+  for (const lead of leads) {
+    const card = document.createElement('div');
+    card.className = 'lead-card';
+    let unreadHtml = '';
+    if (lead.unread_count) {
+      unreadHtml = `<div class="unread"><span class="trace-label">unread since handoff (${lead.unread_count})</span>`;
+      for (const um of lead.unread_messages) {
+        unreadHtml += `<div class="msg">${esc(um.content)} <span style="opacity:.5">· ${fmtTime(um.created_at)}</span></div>`;
+      }
+      unreadHtml += '</div>';
+    }
+    card.innerHTML = `
+      <div class="lead-header">
+        <span class="name">${esc(lead.buyer.name)} · ${esc(lead.buyer.phone)}</span>
+        <span class="badge">${esc(lead.urgency)} · ${esc(lead.reason)}</span>
+      </div>
+      <div class="lead-body">
+        <div class="brief">${esc(lead.brief)}</div>
+        ${unreadHtml}
+      </div>`;
+    body.appendChild(card);
+  }
+}
+
+// initial load + poll
+refreshTrace();
+refreshInbox();
+setInterval(refreshTrace, 2000);
+setInterval(refreshInbox, 3000);
+</script>
+</body>
+</html>

@@ -51,6 +51,11 @@ def writer(monkeypatch):
 
 @pytest.fixture
 def escalated(session):
+    # Nothing is seeded into the transcript, so the brief needs a buyer line of
+    # its own to quote back.
+    session.add(Message(conversation_id=1, role="user",
+                        content="Hi, looking for a 3BHK in Bopal"))
+    session.commit()
     update_buyer_profile(1, {
         "budget_min": 8_000_000, "budget_max": 9_000_000,
         "preferred_localities": ["Bopal"], "bhk_need": 3,

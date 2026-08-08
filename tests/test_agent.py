@@ -140,7 +140,7 @@ class TestDuplicateInbound:
         await agent.on_inbound(1, "wamid.1", "3BHK in Bopal")
         await agent.on_inbound(1, "wamid.1", "3BHK in Bopal")
         assert [m.content for m in messages_of(session) if m.role == "user"] == [
-            "Hi, looking for a 3BHK in Bopal", "3BHK in Bopal",
+            "3BHK in Bopal",
         ]
 
     async def test_a_message_already_in_the_database_is_a_duplicate(self, fast, model, session):

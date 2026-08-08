@@ -24,7 +24,7 @@ from datetime import datetime
 from sqlmodel import Session, select
 
 from app import config, db
-from app.db import Buyer, Conversation, Message, Property
+from app.db import Buyer, Conversation, Property
 from app.format import area_display, possession_display, price_display
 
 
@@ -320,15 +320,13 @@ BUYERS = (
     },
 )
 
-# Fixed opening messages so the live demo cannot wander.
+# The personas the three buyers are built for. No opening message is seeded:
+# the conversation starts empty and whoever is driving the demo types the first
+# line themselves, so the agent never inherits a locality or a budget it was
+# never told.
 #   1 Priya   - English, mid-budget: happy path, search -> details -> book -> escalate
 #   2 Rakesh  - Hinglish negotiator: qualification, then a price ask -> regex escalation
 #   3 Anjali  - deliberately unsatisfiable against the seeded bands -> D14 relaxation
-OPENINGS = (
-    "Hi, looking for a 3BHK in Bopal",
-    "3bhk chahiye bhai, budget 65 lakh",
-    "3BHK in Satellite under 80 lakh",
-)
 
 CONVERSATIONS = (
     {"id": 1, "buyer_id": 1},
@@ -366,14 +364,6 @@ def seed_all(session: Session) -> None:
     session.add_all([Property(**row) for row in PROPERTIES])
     session.add_all([Buyer(**row) for row in BUYERS])
     session.add_all([Conversation(**row) for row in CONVERSATIONS])
-    session.commit()
-
-    # Only user and assistant rows are ever written (D11); these are user rows,
-    # so they carry no model or latency telemetry.
-    session.add_all([
-        Message(conversation_id=convo["id"], role="user", content=opening)
-        for convo, opening in zip(CONVERSATIONS, OPENINGS)
-    ])
     session.commit()
 
 
@@ -416,12 +406,12 @@ def summary_lines() -> list[str]:
         f"{sum(1 for p in PROPERTIES if p['status'] == 'ready_to_move'):>7}"
         f"{sum(1 for p in PROPERTIES if p['status'] == 'under_construction'):>10}",
         "",
-        "  Buyers and their opening messages",
+        "  Buyers (every conversation starts empty - type the first message yourself)",
         "  " + "-" * 77,
     ]
-    for buyer, opening in zip(BUYERS, OPENINGS):
+    for buyer in BUYERS:
         lines.append(f"  {buyer['id']}  {buyer['name']:<8} conversation {buyer['id']}"
-                     f"  \"{opening}\"")
+                     f"  phone {buyer['phone']}")
 
     sample = PROPERTIES[4]
     lines += [
@@ -434,7 +424,7 @@ def summary_lines() -> list[str]:
         f"  {'RERA':<20} {sample['rera_id']}",
         "",
         f"  Tables: properties {len(PROPERTIES)}  ·  buyers {len(BUYERS)}"
-        f"  ·  conversations {len(CONVERSATIONS)}  ·  messages {len(OPENINGS)}",
+        f"  ·  conversations {len(CONVERSATIONS)}  ·  messages 0",
         "",
     ]
     return lines

@@ -260,10 +260,12 @@ class TestEvaluatorInTheLoop:
         model(
             calls(("update_buyer_profile", {"buyer_id": 1, "updates": {
                 "budget_max": 9_000_000, "preferred_localities": ["Bopal"],
-                "bhk_need": 3}})),
+                "bhk_need": 3, "possession_need": "2026-12", "family_size": 4}})),
             says("Samajh gaya."),
         )
-        result = await agent.on_inbound(1, "wamid.1", "Bopal, 90 lakh, 3BHK")
+        result = await agent.on_inbound(
+            1, "wamid.1", "Bopal, 90 lakh, 3BHK, Dec 2026, 4 log"
+        )
         assert result["status"] == "escalated"
         assert escalations(session)[0].reason == "qualification_complete"
 
@@ -338,10 +340,12 @@ class TestEveryPathWritesABrief:
         model(
             calls(("update_buyer_profile", {"buyer_id": 1, "updates": {
                 "budget_max": 9_000_000, "preferred_localities": ["Bopal"],
-                "bhk_need": 3}})),
+                "bhk_need": 3, "possession_need": "2026-12", "family_size": 4}})),
             says("Samajh gaya."),
         )
-        await agent.on_inbound(1, "wamid.1", "Bopal, 90 lakh, 3BHK")
+        await agent.on_inbound(
+            1, "wamid.1", "Bopal, 90 lakh, 3BHK, Dec 2026, 4 log"
+        )
         assert escalations(session)[0].brief
 
     async def test_the_step_cap_path(self, fast, model, session):

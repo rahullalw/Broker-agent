@@ -25,8 +25,10 @@ from __future__ import annotations
 
 from collections import defaultdict
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlmodel import select
 
@@ -61,6 +63,19 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+
+STATIC_DIR = Path(__file__).parent / "static"
+
+
+@app.get("/demo")
+def demo_ui() -> FileResponse:
+    """A single-page console: chat, trace panel and broker inbox in one tab.
+
+    Talks to the three endpoints above with plain `fetch`, no build step. Not
+    part of the product surface — a demo convenience the API doesn't depend on.
+    """
+    return FileResponse(STATIC_DIR / "demo.html")
 
 
 class InboundMessage(BaseModel):

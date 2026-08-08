@@ -342,18 +342,20 @@ class TestGetConversation:
     async def test_an_unknown_conversation_is_a_404(self, client):
         assert (await client.get("/conversations/99")).status_code == 404
 
-    async def test_the_seeded_opening_message_is_there(self, client):
+    async def test_a_seeded_conversation_starts_empty(self, client):
+        # Nothing is seeded into the transcript any more - the first message is
+        # whatever the person driving the demo types.
         body = (await client.get("/conversations/1")).json()
         assert body["conversation_id"] == 1
         assert body["status"] == "active"
-        assert body["messages"][0]["content"] == "Hi, looking for a 3BHK in Bopal"
+        assert body["messages"] == []
 
     async def test_the_transcript_is_in_order(self, client, model, fast):
         model(says("Kaisi help chahiye?"))
         await send(client, 1, "hello", "wa-t1")
 
         roles = [m["role"] for m in (await client.get("/conversations/1")).json()["messages"]]
-        assert roles == ["user", "user", "assistant"]
+        assert roles == ["user", "assistant"]
 
     async def test_tool_calls_are_joined_onto_the_turn_that_made_them(
         self, client, model, fast
@@ -382,8 +384,12 @@ class TestGetConversation:
         assert assistant["latency_ms"] >= 0
         assert assistant["inbound_latency_ms"] >= 0
 
-    async def test_user_rows_carry_no_telemetry(self, client):
+    async def test_user_rows_carry_no_telemetry(self, client, model, fast):
+        model(says("Sure."))
+        await send(client, 1, "hello", "wa-t3b")
+
         user_row = (await client.get("/conversations/1")).json()["messages"][0]
+        assert user_row["role"] == "user"
         assert "model_used" not in user_row
         assert "latency_ms" not in user_row
 

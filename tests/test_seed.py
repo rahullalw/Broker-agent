@@ -167,12 +167,8 @@ class TestPersonas:
     def test_personas_are_the_three_from_the_spec(self):
         assert [b["name"] for b in seed.BUYERS] == ["Priya", "Rakesh", "Anjali"]
 
-    def test_opening_messages_are_verbatim(self):
-        assert seed.OPENINGS == (
-            "Hi, looking for a 3BHK in Bopal",
-            "3bhk chahiye bhai, budget 65 lakh",
-            "3BHK in Satellite under 80 lakh",
-        )
+    def test_no_opening_message_is_seeded(self):
+        assert not hasattr(seed, "OPENINGS")
 
     def test_qualification_starts_unknown_so_the_agent_has_work_to_do(self):
         # D12 - the known/unknown block is only interesting if it starts empty.
@@ -223,15 +219,13 @@ class TestSeededDatabase:
             assert {c.status for c in convos} == {"active"}
             assert {c.clarification_count for c in convos} == {0}
 
-    def test_each_conversation_holds_exactly_its_opening_message(self, seeded):
+    def test_every_conversation_starts_with_an_empty_transcript(self, seeded):
         with open_seeded(seeded) as s:
-            for convo_id, opening in zip((1, 2, 3), seed.OPENINGS):
+            for convo_id in (1, 2, 3):
                 msgs = s.exec(
                     select(Message).where(Message.conversation_id == convo_id)
                 ).all()
-                assert len(msgs) == 1
-                assert msgs[0].role == "user"
-                assert msgs[0].content == opening
+                assert msgs == []
 
     def test_opening_messages_carry_no_assistant_telemetry(self, seeded):
         with open_seeded(seeded) as s:
@@ -278,7 +272,7 @@ class TestResetCli:
         with open_seeded(tmp_path) as s:
             assert len(s.exec(select(Property)).all()) == 25
             assert len(s.exec(select(Buyer)).all()) == 3
-            assert len(s.exec(select(Message)).all()) == 3
+            assert len(s.exec(select(Message)).all()) == 0
 
     def test_reset_is_deterministic(self, tmp_path):
         def fingerprint():

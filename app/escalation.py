@@ -106,16 +106,23 @@ def _possession_and_price_asked(session, conversation_id: int) -> bool:
 
 
 def _qualification_complete(buyer: Buyer) -> bool:
-    """Budget **and** locality **and** (BHK **or** possession).
+    """Every field in the prompt's qualification order, and nothing less:
+    budget, locality, BHK, possession timeline, family size.
 
     Taken literally, §9's "budget confirmed and locality locked" fires at turn
-    three — the first two steps of the qualification order. Requiring one more
-    lets the agent complete a real arc and surface properties before handing off.
+    three — the first two steps of the qualification order — and a nurture agent
+    that nurtures for ninety seconds is not one. Requiring the whole list lets
+    the conversation run as long as it needs to: the agent asks one question per
+    message, so this cannot fire before the buyer has actually answered all five,
+    however many turns that takes.
     """
-    has_budget = buyer.budget_min is not None or buyer.budget_max is not None
-    has_locality = bool(buyer.preferred_localities)
-    has_shape = buyer.bhk_need is not None or buyer.possession_need is not None
-    return has_budget and has_locality and has_shape
+    return (
+        (buyer.budget_min is not None or buyer.budget_max is not None)
+        and bool(buyer.preferred_localities)
+        and buyer.bhk_need is not None
+        and buyer.possession_need is not None
+        and buyer.family_size is not None
+    )
 
 
 def evaluate(conversation_id: int, message_id: int) -> tuple[str, str] | None:
