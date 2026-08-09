@@ -263,14 +263,14 @@ fi
 beat "1 · Priya — the scripted conversation (conversation 1)"
 # ===========================================================================
 
-# Five turns, not the six in Phase 5 §2, and the budget turn is missing on
-# purpose. D16's evaluator hands a lead over once budget, locality, BHK,
-# possession AND family size are all captured — the whole qualification order,
-# not just three of five fields. Withholding the budget keeps Priya's
-# qualification incomplete throughout, which is what lets the arc reach the
-# booking and hand off on `site_visit_booked` instead: the strongest trigger,
-# first in PRECEDENCE, and the one Phase 5 §2 wanted turn 6 to fire. Every
-# capability in the §2 table still gets demonstrated.
+# Five turns, not the six in Phase 5 §2. The budget turn is still missing, but
+# it is no longer load-bearing: D16's two state triggers (`qualification_complete`
+# and `possession_and_price_asked`) now wait for a turn that achieved nothing,
+# so a fully-qualified buyer who keeps asking still gets searched for, answered
+# and booked. This arc reaches the booking on its merits and hands off on
+# `site_visit_booked` — the strongest trigger, first in PRECEDENCE, and the one
+# Phase 5 §2 wanted turn 6 to fire. Every capability in the §2 table still gets
+# demonstrated.
 
 note "1 · qualification starts        -> update_buyer_profile, asks the first unknown"
 turn 1 "demo-p1-t1" "Hi, looking for a 3BHK in Bopal"

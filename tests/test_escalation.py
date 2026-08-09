@@ -30,6 +30,36 @@ def log(session, message_id, tool_name, args, result):
     session.commit()
 
 
+def flat_turn(session):
+    """A later turn that called no tools.
+
+    The two state triggers only fire once the conversation goes flat, so a test
+    that evaluates on the same turn that did the work is asserting the old
+    fire-immediately behaviour.
+    """
+    message = Message(conversation_id=1, role="user", content="hmm")
+    session.add(message)
+    session.commit()
+    session.refresh(message)
+    return message.id
+
+
+def reply(session, tool_results, text):
+    """One assistant turn: score it, then persist it as the agent does.
+
+    The counter compares against the *previous* assistant message, so a test
+    that never writes one can never observe a repeat.
+    """
+    escalation.update_clarification_count(1, tool_results, text)
+    session.add(Message(conversation_id=1, role="assistant", content=text))
+    session.commit()
+
+
+def count(session):
+    session.expire_all()
+    return session.get(Conversation, 1).clarification_count
+
+
 def qualify(**fields):
     update_buyer_profile(1, fields)
 
@@ -127,12 +157,24 @@ class TestPossessionAndPriceAsked:
             {"property_id": 5, "sections": ["possession"]}, {"id": 5})
         log(session, turn, "get_property_details",
             {"property_id": 5, "sections": ["pricing"]}, {"id": 5})
-        assert escalation.evaluate(1, turn) == ("possession_and_price_asked", "high")
+        assert escalation.evaluate(1, flat_turn(session)) == (
+            "possession_and_price_asked", "high"
+        )
 
     def test_both_in_one_call_fire(self, session, turn):
         log(session, turn, "get_property_details",
             {"property_id": 5, "sections": ["pricing", "possession"]}, {"id": 5})
-        assert escalation.evaluate(1, turn) == ("possession_and_price_asked", "high")
+        assert escalation.evaluate(1, flat_turn(session)) == (
+            "possession_and_price_asked", "high"
+        )
+
+    def test_the_turn_that_fetched_them_does_not_fire(self, session, turn):
+        """The agent has just answered the price-and-possession question. Handing
+        off on this turn appends the goodbye to that answer and silences the
+        agent before the buyer can say "theek hai, visit karna hai"."""
+        log(session, turn, "get_property_details",
+            {"property_id": 5, "sections": ["pricing", "possession"]}, {"id": 5})
+        assert escalation.evaluate(1, turn) is None
 
     def test_possession_alone_does_not_fire(self, session, turn):
         log(session, turn, "get_property_details",
@@ -185,41 +227,69 @@ class TestDedupe:
 
 
 class TestClarificationCounter:
-    """`clarification_count` had no producer. A turn that captured nothing and
-    ended in a question is what a failed clarification looks like."""
+    """`clarification_count` had no producer. A failed clarification is the agent
+    **asking the same thing again** and still achieving nothing — not merely a
+    turn that ended in a question, which §10 makes true of nearly every turn."""
 
-    def test_a_question_that_captured_nothing_increments(self, session, turn):
-        escalation.update_clarification_count(1, [], "Budget kitna hai?")
-        session.expire_all()
-        assert session.get(Conversation, 1).clarification_count == 1
+    def test_a_first_question_does_not_count(self, session, turn):
+        """There is nothing to have repeated yet."""
+        reply(session, [], "Budget kitna hai?")
+        assert count(session) == 0
+
+    def test_asking_the_same_thing_again_counts(self, session, turn):
+        reply(session, [], "Budget kitna hai?")
+        reply(session, [], "Budget kitna hai?")
+        assert count(session) == 1
+
+    def test_a_rephrase_of_the_same_ask_still_counts(self, session, turn):
+        reply(session, [], "Aapka budget kitna hai?")
+        reply(session, [], "Sorry — aapka budget kitna hai bhai?")
+        assert count(session) == 1
+
+    def test_moving_to_the_next_question_resets_it(self, session, turn):
+        """The qualification arc: budget -> locality -> BHK. Each is a new ask,
+        so a cooperative buyer who simply has no figures yet never accumulates."""
+        reply(session, [], "Aapka budget kitna hai?")
+        reply(session, [], "Aapka budget kitna hai?")
+        reply(session, [], "Kaunse area mein ghar dekh rahe hain?")
+        assert count(session) == 0
+
+    def test_the_opening_arc_never_counts(self, session, turn):
+        """The transcript that used to escalate on turn three: greeting, then two
+        qualification questions, no tool call anywhere. Nothing failed here."""
+        reply(session, [], "To get started, could you let me know what your "
+                           "budget range is?")
+        reply(session, [], "Sabse pehle, kya aap mujhe apna budget bata sakte hain?")
+        reply(session, [], "Kya aap bata sakte hain ki aap kin areas mein ghar "
+                           "dekh rahe hain?")
+        assert count(session) == 0
+        assert escalation.evaluate(1, turn) is None
 
     def test_a_successful_capture_resets_it(self, session, turn):
-        escalation.update_clarification_count(1, [], "Budget kitna hai?")
-        escalation.update_clarification_count(
-            1,
-            [{"tool_name": "update_buyer_profile", "result": {"profile": {}}}],
-            "Bopal ya Shela?",
-        )
-        session.expire_all()
-        assert session.get(Conversation, 1).clarification_count == 0
+        reply(session, [], "Budget kitna hai?")
+        reply(session, [], "Budget kitna hai?")
+        reply(session,
+              [{"tool_name": "update_buyer_profile", "result": {"profile": {}}}],
+              "Budget kitna hai?")
+        assert count(session) == 0
 
     def test_a_steering_error_does_not_count_as_a_capture(self, session, turn):
-        escalation.update_clarification_count(
-            1,
-            [{"tool_name": "update_buyer_profile", "result": {"error": "no match"}}],
-            "Kaunsi area?",
-        )
-        session.expire_all()
-        assert session.get(Conversation, 1).clarification_count == 1
+        reply(session, [], "Kaunsi area?")
+        reply(session,
+              [{"tool_name": "update_buyer_profile", "result": {"error": "no match"}}],
+              "Kaunsi area?")
+        assert count(session) == 1
 
     def test_a_statement_rather_than_a_question_does_not_increment(self, session, turn):
-        escalation.update_clarification_count(1, [], "Bopal me teen options hain.")
-        session.expire_all()
-        assert session.get(Conversation, 1).clarification_count == 0
+        reply(session, [], "Bopal me teen options hain.")
+        reply(session, [], "Bopal me teen options hain.")
+        assert count(session) == 0
 
-    def test_three_failures_reach_the_evaluator_threshold(self, session, turn):
-        for _ in range(3):
-            escalation.update_clarification_count(1, [], "Budget kitna hai?")
+    def test_three_repeats_reach_the_evaluator_threshold(self, session, turn):
+        """Four identical asks — three of them repeats — is an agent in a loop."""
+        for _ in range(4):
+            reply(session, [], "Budget kitna hai?")
+        assert count(session) == 3
         assert escalation.evaluate(1, turn) == ("clarification_exhausted", "medium")
 
     def test_a_turn_that_did_real_work_is_not_a_failed_clarification(
@@ -229,46 +299,28 @@ class TestClarificationCounter:
         trailing "?" alone is true on nearly every turn. Counting those escalates
         any conversation that runs three turns without a profile write — even one
         where the agent searched, quoted possession and read back a RERA id."""
-        escalation.update_clarification_count(
-            1,
-            [{"tool_name": "search_properties", "result": {"exact_matches": [{}]}}],
-            "Do any of these work for you?",
-        )
-        session.expire_all()
-        assert session.get(Conversation, 1).clarification_count == 0
+        reply(session, [], "Do any of these work for you?")
+        reply(session,
+              [{"tool_name": "search_properties", "result": {"exact_matches": [{}]}}],
+              "Do any of these work for you?")
+        assert count(session) == 0
 
     def test_a_full_browsing_arc_never_reaches_the_threshold(self, session, turn):
-        # search -> possession -> legal, each ending in a question. This is the
-        # scripted demo, and it must not hand off on turn three.
+        # search -> possession -> legal, each ending in the same question. This
+        # is the scripted demo, and it must not hand off on turn three.
         for tool in ("search_properties", "get_property_details", "get_property_details"):
-            escalation.update_clarification_count(
-                1, [{"tool_name": tool, "result": {"id": 5}}], "Anything else?"
-            )
-        session.expire_all()
-        assert session.get(Conversation, 1).clarification_count == 0
+            reply(session, [{"tool_name": tool, "result": {"id": 5}}], "Anything else?")
+        assert count(session) == 0
         assert escalation.evaluate(1, turn) is None
 
-    def test_a_turn_where_every_tool_errored_still_counts(self, session, turn):
-        # Nothing was achieved, so the clarification genuinely failed.
-        escalation.update_clarification_count(
-            1,
-            [{"tool_name": "search_properties", "result": {"error": "No match for x"}}],
-            "Which locality did you mean?",
-        )
-        session.expire_all()
-        assert session.get(Conversation, 1).clarification_count == 1
-
-    def test_progress_stops_the_count_rising_without_resetting_it(
-        self, session, turn
-    ):
-        """Only the buyer answering resets the run. A useful turn just does not
-        add to it."""
-        escalation.update_clarification_count(1, [], "Budget kitna hai?")
-        escalation.update_clarification_count(
-            1, [{"tool_name": "search_properties", "result": {}}], "In Bopal or Shela?"
-        )
-        session.expire_all()
-        assert session.get(Conversation, 1).clarification_count == 1
+    def test_a_repeat_where_every_tool_errored_still_counts(self, session, turn):
+        # Nothing was achieved and the agent asked the same thing again, so the
+        # clarification genuinely failed.
+        reply(session, [], "Which locality did you mean?")
+        reply(session,
+              [{"tool_name": "search_properties", "result": {"error": "No match"}}],
+              "Which locality did you mean?")
+        assert count(session) == 1
 
 
 class TestHandoffLine:

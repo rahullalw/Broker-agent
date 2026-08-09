@@ -266,8 +266,36 @@ class TestEvaluatorInTheLoop:
         result = await agent.on_inbound(
             1, "wamid.1", "Bopal, 90 lakh, 3BHK, Dec 2026, 4 log"
         )
+        # Not on this turn: the profile was completed *by* this turn, and the
+        # agent has just promised to go and look. Cutting it off here is what
+        # produced "main abhi options check karta hoon" followed by silence.
+        assert result["status"] == "active"
+
+        model(says("Aur kuch?"))
+        result = await agent.on_inbound(1, "wamid.2", "ok")
         assert result["status"] == "escalated"
         assert escalations(session)[0].reason == "qualification_complete"
+
+    async def test_a_qualified_buyer_still_gets_their_properties(
+        self, fast, model, session
+    ):
+        """The arc the console was missing: qualify, then search, then show. The
+        handoff waits for the agent to run out of things to do."""
+        model(
+            calls(("update_buyer_profile", {"buyer_id": 1, "updates": {
+                "budget_max": 9_000_000, "preferred_localities": ["Bopal"],
+                "bhk_need": 3, "possession_need": "2026-12", "family_size": 4}})),
+            says("Samajh gaya."),
+        )
+        await agent.on_inbound(1, "wamid.1", "Bopal, 90 lakh, 3BHK, Dec 2026, 4 log")
+
+        model(
+            calls(("search_properties", {"bhk": 3, "localities": ["Bopal"]})),
+            says("Ye options hain — koi pasand aaya?"),
+        )
+        result = await agent.on_inbound(1, "wamid.2", "haan dikhao")
+        assert result["status"] == "active"
+        assert escalations(session) == []
 
     async def test_both_authorities_in_one_turn_write_one_row(
         self, fast, model, session, slot
@@ -290,12 +318,72 @@ class TestEvaluatorInTheLoop:
         assert again["status"] == "escalated"
 
 
+class TestTheFullArcReachesTheBooking:
+    """The arc the demo console kept losing: a buyer who answers everything
+    should still be shown properties, get their price-and-possession question
+    answered, and be booked in — and only *then* meet a broker.
+
+    `demo.sh` used to have to withhold the budget and never mention pricing to
+    keep the two state triggers from cutting this short. It no longer does.
+    """
+
+    async def test_qualify_search_details_then_book(self, fast, model, session, slot):
+        model(
+            calls(("update_buyer_profile", {"buyer_id": 1, "updates": {
+                "budget_max": 9_000_000, "preferred_localities": ["Bopal"],
+                "bhk_need": 3, "possession_need": "2026-12", "family_size": 4}})),
+            says("Samajh gaya."),
+        )
+        result = await agent.on_inbound(1, "wamid.1", "Bopal, 90 lakh, 3BHK, Dec 26, 4 log")
+        assert result["status"] == "active", "qualification alone must not hand off"
+
+        model(
+            calls(("search_properties", {"bhk": 3, "localities": ["Bopal"]})),
+            says("Ye options hain — koi pasand aaya?"),
+        )
+        result = await agent.on_inbound(1, "wamid.2", "haan options dikhao")
+        assert result["status"] == "active", "the buyer must actually see properties"
+
+        model(
+            calls(("get_property_details",
+                   {"property_id": 5, "sections": ["pricing", "possession"]})),
+            says("Ye rahi details — visit karna chahenge?"),
+        )
+        result = await agent.on_inbound(1, "wamid.3", "iska price aur possession batao")
+        assert result["status"] == "active", "answering price+possession is not goodbye"
+
+        model(calls(booking(slot)), says("Booked."))
+        result = await agent.on_inbound(1, "wamid.4", "Saturday 5pm visit karna hai")
+        assert result["status"] == "escalated"
+        assert escalations(session)[0].reason == "site_visit_booked"
+        assert escalations(session)[0].urgency == "high"
+        assert "Booked." in result["reply"]
+
+
 class TestClarificationCounting:
-    async def test_a_question_that_captured_nothing_counts(self, fast, model, session):
+    async def test_a_first_question_does_not_count(self, fast, model, session):
+        """Nothing has been repeated yet — the opening question is just the
+        opening question."""
         model(says("Budget kitna hai?"))
         await agent.on_inbound(1, "wamid.1", "hmm")
         session.expire_all()
+        assert session.get(Conversation, 1).clarification_count == 0
+
+    async def test_asking_the_same_thing_again_counts(self, fast, model, session):
+        for index in range(2):
+            model(says("Budget kitna hai?"))
+            await agent.on_inbound(1, f"wamid.{index}", "hmm")
+        session.expire_all()
         assert session.get(Conversation, 1).clarification_count == 1
+
+    async def test_a_new_question_resets_it(self, fast, model, session):
+        for index, reply in enumerate(
+            ["Budget kitna hai?", "Budget kitna hai?", "Kaunsi area chahiye?"]
+        ):
+            model(says(reply))
+            await agent.on_inbound(1, f"wamid.{index}", "hmm")
+        session.expire_all()
+        assert session.get(Conversation, 1).clarification_count == 0
 
     async def test_capturing_something_resets_it(self, fast, model, session):
         model(says("Budget kitna hai?"))
@@ -308,12 +396,29 @@ class TestClarificationCounting:
         session.expire_all()
         assert session.get(Conversation, 1).clarification_count == 0
 
-    async def test_three_in_a_row_escalate(self, fast, model, session):
-        for index in range(3):
+    async def test_four_identical_asks_escalate(self, fast, model, session):
+        """Three repeats of the same ask, achieving nothing each time, is an
+        agent stuck in a loop rather than one qualifying a buyer."""
+        for index in range(4):
             model(says("Budget kitna hai?"))
             result = await agent.on_inbound(1, f"wamid.{index}", "hmm")
         assert result["status"] == "escalated"
         assert escalations(session)[0].reason == "clarification_exhausted"
+
+    async def test_a_qualification_arc_does_not_escalate(self, fast, model, session):
+        """The transcript from the demo console: greeting, budget, locality —
+        a cooperative buyer with no figures yet. It used to hand off on turn
+        three."""
+        for index, reply in enumerate([
+            "To get started, could you let me know what your budget range is?",
+            "Sabse pehle, kya aap mujhe apna budget bata sakte hain?",
+            "Kya aap bata sakte hain ki aap kin areas mein ghar dekh rahe hain?",
+            "Aur ghar mein kitne log rehne wale hain?",
+        ]):
+            model(says(reply))
+            result = await agent.on_inbound(1, f"wamid.{index}", "hmm")
+        assert result["status"] == "active"
+        assert escalations(session) == []
 
 
 # --------------------------------------------------------------------------
@@ -346,6 +451,8 @@ class TestEveryPathWritesABrief:
         await agent.on_inbound(
             1, "wamid.1", "Bopal, 90 lakh, 3BHK, Dec 2026, 4 log"
         )
+        model(says("Aur kuch?"))          # the flat turn the evaluator waits for
+        await agent.on_inbound(1, "wamid.2", "ok")
         assert escalations(session)[0].brief
 
     async def test_the_step_cap_path(self, fast, model, session):

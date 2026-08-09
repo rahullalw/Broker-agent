@@ -29,6 +29,10 @@ PRECEDENCE = (
 
 CLARIFICATION_LIMIT = 3
 
+# Two questions count as "the same question" at this much word overlap. Loose
+# enough to catch a rephrase, tight enough that budget->locality is a new ask.
+REPEAT_OVERLAP = 0.6
+
 HANDOFF_HI = (
     "Main aapko humare broker se connect kar raha hoon, "
     "wo thodi der mein aapse baat karenge."
@@ -97,6 +101,15 @@ def _booked_this_turn(session, conversation_id: int, message_id: int) -> bool:
     )
 
 
+def _progressed_this_turn(session, conversation_id: int, message_id: int) -> bool:
+    """Did this turn actually do something — search, fetch details, book, write
+    the profile — as opposed to only talking?"""
+    return any(
+        "error" not in (row.result or {})
+        for row in _tool_calls(session, conversation_id, message_id)
+    )
+
+
 def _possession_and_price_asked(session, conversation_id: int) -> bool:
     asked: set[str] = set()
     for row in _tool_calls(session, conversation_id):
@@ -115,6 +128,19 @@ def _qualification_complete(buyer: Buyer) -> bool:
     the conversation run as long as it needs to: the agent asks one question per
     message, so this cannot fire before the buyer has actually answered all five,
     however many turns that takes.
+
+    **This is only half the trigger** — `evaluate` also requires the turn to have
+    achieved nothing (`_progressed_this_turn`). A complete profile is not itself
+    the moment to hand off: the field that completes it is written by the same
+    turn that captured it, so escalating on state alone cuts the agent off
+    mid-sentence, one turn *before* it searches. The buyer is told "main abhi
+    aapke liye options check karta hoon" and then the agent goes silent forever,
+    having shown nothing.
+
+    Read as a fallback instead, it composes with the arc rather than truncating
+    it. Capture, search, details and booking all count as progress, so the
+    handoff lands where it belongs — on `site_visit_booked`, or on the first turn
+    where a fully-qualified buyer has nothing left for the agent to do.
     """
     return (
         (buyer.budget_min is not None or buyer.budget_max is not None)
@@ -136,12 +162,25 @@ def evaluate(conversation_id: int, message_id: int) -> tuple[str, str] | None:
             return None
         buyer = session.get(Buyer, convo.buyer_id)
 
+        # A booking is the terminal action, so it hands off on its own turn.
+        # The other two are *state* checks — conditions that stay true once
+        # reached — and firing them the moment they go true cuts the agent off
+        # mid-arc, on the very turn it did the work that satisfied them. They
+        # wait for a turn that achieved nothing instead. See
+        # `_qualification_complete` for the full argument.
+        progressed = _progressed_this_turn(session, conversation_id, message_id)
+
         fired = {
             "site_visit_booked": _booked_this_turn(session, conversation_id, message_id),
-            "possession_and_price_asked": _possession_and_price_asked(
-                session, conversation_id
+            "possession_and_price_asked": (
+                _possession_and_price_asked(session, conversation_id)
+                and not progressed
             ),
-            "qualification_complete": buyer is not None and _qualification_complete(buyer),
+            "qualification_complete": (
+                buyer is not None
+                and _qualification_complete(buyer)
+                and not progressed
+            ),
             "clarification_exhausted": convo.clarification_count >= CLARIFICATION_LIMIT,
         }
 
@@ -157,37 +196,77 @@ def _succeeded(result: dict, name: str | None = None) -> bool:
     return "error" not in (result.get("result") or {})
 
 
+def _last_question(text: str) -> str | None:
+    """The final question in a reply, normalised to bare words.
+
+    Comparing whole replies is useless — the wrapper sentence changes every turn
+    ("Koi baat nahi, ..." / "Zaroor, ...") while the ask underneath stays the
+    same. The question is the only part that says whether the agent moved on.
+    """
+    questions = re.findall(r"[^.!?\n]*\?", text or "")
+    if not questions:
+        return None
+    words = re.findall(r"[a-z0-9]+", questions[-1].lower())
+    return " ".join(words) or None
+
+
+def _same_question(current: str | None, previous: str | None) -> bool:
+    """Word-overlap, not equality — a model rephrasing the identical ask is
+    still the identical ask ("kya aap budget bata sakte hain?" /
+    "aap apna budget bata sakte hain?")."""
+    if not current or not previous:
+        return False
+    a, b = set(current.split()), set(previous.split())
+    return len(a & b) / len(a | b) >= REPEAT_OVERLAP
+
+
+def _previous_assistant_text(session, conversation_id: int) -> str | None:
+    """The reply *before* this turn's. Safe to read: the caller runs before
+    `_reply` writes the current assistant row."""
+    row = session.exec(
+        select(Message)
+        .where(Message.conversation_id == conversation_id)
+        .where(Message.role == "assistant")
+        .order_by(Message.id.desc())
+    ).first()
+    return row.content if row else None
+
+
 def update_clarification_count(
     conversation_id: int, tool_results: list[dict], reply_text: str
 ) -> int:
     """Maintain the counter D16's third trigger reads.
 
     The spec names the trigger but not what makes a clarification "failed", so
-    this is the working definition: the agent asked a question **and the turn
-    achieved nothing at all**. Any successful profile write resets it — the buyer
-    answered, so the run of failures is over.
+    this is the working definition: the agent **asked the same question again**
+    and the turn still achieved nothing. Any successful tool call resets it — the
+    conversation moved, whatever the reply ended with.
 
-    Both halves matter. §10 tells the agent to end every message with a question,
-    so `asked_again` alone is true on essentially every turn; counting those
-    would escalate any conversation that ran three turns without a profile
-    write — including one where the agent searched, quoted possession and read
-    back a RERA id. A turn that called a tool successfully advanced the
-    conversation, whatever it ended with. It is not a failed clarification.
+    Requiring the repeat is the whole point. §10 tells the agent to end every
+    message with a question, and the opening arc has nothing to write to the
+    profile yet: "hi" → asks budget, "mujhe ghar lena hai" → asks budget,
+    "budget socha nahi hai" → asks locality. Counting bare question-marks made
+    that cooperative three-turn opening indistinguishable from an agent stuck in
+    a loop, and escalated it at turn three. A *new* question means the buyer
+    answered and the agent advanced; only a repeat is evidence of being stuck.
     """
-    captured = any(
-        _succeeded(result, "update_buyer_profile") for result in tool_results
-    )
     progressed = any(_succeeded(result) for result in tool_results)
-    asked_again = (reply_text or "").strip().endswith("?") and not progressed
 
     with db.get_session() as session:
         convo = session.get(Conversation, conversation_id)
         if convo is None:
             return 0
-        if captured:
+
+        if progressed:
             convo.clarification_count = 0
-        elif asked_again:
-            convo.clarification_count += 1
+        else:
+            asked = _last_question(reply_text)
+            previous = _last_question(_previous_assistant_text(session, conversation_id))
+            if _same_question(asked, previous):
+                convo.clarification_count += 1
+            else:
+                convo.clarification_count = 0
+
         session.add(convo)
         session.commit()
         return convo.clarification_count
